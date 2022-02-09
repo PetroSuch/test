@@ -1,0 +1,154 @@
+import { Injectable } from '@angular/core'
+
+@Injectable()
+export class CacheService {
+    constructor() { }
+
+    save(options: LocalStorageSaveOptions) {
+        // Set default values for optionals
+        options.expirationMins = options.expirationMins || 0
+
+        // Set expiration date in miliseconds
+        const expirationMS = options.expirationMins !== 0 ? options.expirationMins * 60 * 1000 : 0
+
+        const record = {
+            value: typeof options.data === 'string' ? options.data : JSON.stringify(options.data),
+            expiration: expirationMS !== 0 ? new Date().getTime() + expirationMS : null,
+            hasExpiration: expirationMS !== 0 ? true : false
+        }
+        localStorage.setItem(options.key, JSON.stringify(record))
+    }
+
+    load(key: string) {
+        // Get cached data from localstorage
+        const item = localStorage.getItem(key)
+        if (item !== null) {
+            const record = JSON.parse(item)
+            const now = new Date().getTime()
+            // Expired data will return null
+            if (!record || (record.hasExpiration && record.expiration <= now)) {
+                return null
+            } else {
+                return JSON.parse(record.value)
+            }
+        }
+        return null
+    }
+
+    remove(key: string) {
+        localStorage.removeItem(key)
+    }
+
+    cleanLocalStorage() {
+        localStorage.clear()
+    }
+}
+
+export class LocalStorageSaveOptions {
+    key: string
+    data: any
+    expirationMins?: number
+}
+http-client.service.ts
+import { Injectable } from '@angular/core'
+import { HttpClient } from '@angular/common/http'
+import { CacheService } from './cache.service'
+import { Observable, of } from 'rxjs'
+import { switchMap } from 'rxjs/operators'
+
+export enum Verbs {
+    GET = 'GET',
+    PUT = 'PUT',
+    POST = 'POST',
+    DELETE = 'DELETE'
+}
+
+@Injectable()
+export class HttpClientService {
+
+    constructor(
+        private http: HttpClient,
+        private _cacheService: CacheService,
+    ) { }
+
+    get<T>(options: HttpOptions): Observable<T> {
+        return this.httpCall(Verbs.GET, options)
+    }
+
+    delete<T>(options: HttpOptions): Observable<T> {
+        return this.httpCall(Verbs.DELETE, options)
+    }
+
+    post<T>(options: HttpOptions): Observable<T> {
+        return this.httpCall(Verbs.POST, options)
+    }
+
+    put<T>(options: HttpOptions): Observable<T> {
+        return this.httpCall(Verbs.PUT, options)
+    }
+
+    private httpCall<T>(verb: Verbs, options: HttpOptions): Observable<T> {
+
+        // Setup default values
+        options.body = options.body || null
+        options.cacheMins = options.cacheMins || 0
+
+        if (options.cacheMins > 0) {
+            // Get data from cache
+            const data = this._cacheService.load(options.url)
+            // Return data from cache
+            if (data !== null) {
+                return of<T>(data)
+            }
+        }
+
+        return this.http.request<T>(verb, options.url, {
+            body: options.body
+        })
+            .pipe(
+                switchMap(response => {
+                    if (options.cacheMins > 0) {
+                        // Data will be cached
+                        this._cacheService.save({
+                            key: options.url,
+                            data: response,
+                            expirationMins: options.cacheMins
+                        })
+                    }
+                    return of<T>(response)
+                })
+            )
+    }
+}
+
+export class HttpOptions {
+    url: string
+    body?: any
+    cacheMins?: number
+}
+Now, let's say we have a product service we use to retrieve a list of products from our API. In this service we'll use our recently created http-client service to make a request and save the data in the localstorage for 5 minutes:
+// product.service.ts
+
+import { Injectable } from '@angular/core'
+import { HttpClientService } from './http-client.service'
+import { Observable } from 'rxjs'
+
+@Injectable()
+export class ProductService {
+
+    constructor(
+        private _http: HttpClientService
+    ) { }
+
+    getAll(): Observable<Product[]> {
+        return this._http
+            .get<Product[]>({ url: 'https://example-api/products', cacheMins: 5 })
+    }
+}
+
+export class Product {
+    name: string
+    description: string
+    price: number
+    available: boolean
+}
